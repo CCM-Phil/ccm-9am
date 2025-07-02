@@ -237,6 +237,58 @@ class ServiceDataManager:
         """Get service data for a specific date"""
         event_data = self.data.get(date_str, {})
         return self.extract_song_data(event_data)
+    """Manages service data operations"""
+    
+    def __init__(self, json_path: str):
+        self.json_path = Path(json_path)
+        self.data = {}
+        self.load_data()
+    
+    def load_data(self) -> bool:
+        """Load service data from JSON file"""
+        try:
+            if self.json_path.exists():
+                with open(self.json_path, 'r', encoding='utf-8') as file:
+                    self.data = json.load(file)
+                logging.info("Service data loaded successfully")
+                return True
+            else:
+                logging.warning(f"JSON file not found: {self.json_path}")
+                return False
+        except Exception as e:
+            logging.error(f"Failed to load service data: {e}")
+            return False
+    
+    def get_sorted_dates(self) -> List[str]:
+        """Get sorted list of service dates"""
+        return sorted(self.data.keys(), key=lambda x: datetime.strptime(x, '%d/%m/%Y'))
+    
+    def find_nearest_upcoming_service(self) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """Find the nearest upcoming service"""
+        today = datetime.today().date()
+        future_events = [
+            (date_str, details) 
+            for date_str, details in self.data.items() 
+            if datetime.strptime(date_str, '%d/%m/%Y').date() >= today
+        ]
+        
+        if future_events:
+            future_events.sort(key=lambda x: datetime.strptime(x[0], '%d/%m/%Y').date())
+            return future_events[0]
+        return None
+    
+    def extract_song_data(self, event_data: Dict[str, Any]) -> Dict[str, str]:
+        """Extract song data from event data"""
+        song_keys = [
+            'song1', 'song2', 'song3', 'start', 'end', 'communion',
+            'song1path', 'song2path', 'song3path', 'startpath', 'endpath', 'communionpath'
+        ]
+        return {key: event_data.get(key, 'none') for key in song_keys}
+    
+    def get_service_data(self, date_str: str) -> Dict[str, str]:
+        """Get service data for a specific date"""
+        event_data = self.data.get(date_str, {})
+        return self.extract_song_data(event_data)
 
 
 class CompanionConnectionDialog:
@@ -349,9 +401,6 @@ class CompanionConnectionDialog:
         """Get the new IP if successful"""
         self.window.wait_window()
         return self.new_ip
-
-
-class SettingsDialog:
     """Settings dialog window"""
     
     def __init__(self, parent, config: Config, refresh_callback):
@@ -440,14 +489,6 @@ class ServiceManagerGUI:
         self.data_manager = None
         self.api = None
         
-        # Setup GUI first
-        self.setup_gui()
-        
-        # Then handle configuration and initialization
-        self._handle_initial_setup()
-    
-    def _handle_initial_setup(self):
-        """Handle initial setup after GUI is created"""
         # Check configuration
         if not self.config.is_valid():
             self._show_config_warning()
@@ -458,7 +499,10 @@ class ServiceManagerGUI:
         if self.api and not self._check_companion_connection():
             self._prompt_for_companion_ip()
         
+        self.setup_gui()
         self._load_initial_data()
+    
+    def _check_companion_connection(self) -> bool:
         """Check if Companion is reachable"""
         if not self.api:
             return False
@@ -466,7 +510,7 @@ class ServiceManagerGUI:
         logging.info(f"Testing connection to Companion at {self.api.companion_ip}")
         return self.api.test_connection()
     
-    def _check_companion_connection(self) -> bool:
+    def _prompt_for_companion_ip(self):
         """Prompt user to update Companion IP if connection fails"""
         # Create a temporary root for the dialog
         temp_root = tk.Tk()
@@ -490,11 +534,17 @@ class ServiceManagerGUI:
     
     def _show_config_warning(self):
         """Show configuration warning dialog"""
+        root = tk.Tk()
+        root.withdraw()
         messagebox.showwarning(
             "Configuration Missing", 
             "Save folder path or Companion IP is missing.\nPlease update the settings."
         )
-        SettingsDialog(self.root, self.config, self._refresh_components)
+        SettingsDialog(root, self.config, self._refresh_components)
+        root.destroy()
+        
+        if not self.config.is_valid():
+            exit("Configuration incomplete. Exiting.")
     
     def _initialize_components(self):
         """Initialize data manager and API components"""
@@ -627,31 +677,24 @@ class ServiceManagerGUI:
             )
             return
         
-        try:
-            # Populate date dropdown
-            date_options = self.data_manager.get_sorted_dates()
-            self.date_dropdown['values'] = date_options
-            
-            # Set initial date
-            nearest_service = self.data_manager.find_nearest_upcoming_service()
-            if nearest_service:
-                self.date_var.set(nearest_service[0])
-                self.update_song_display(nearest_service[0])
-            elif date_options:
-                self.date_var.set(date_options[0])
-                self.update_song_display(date_options[0])
-                self.feedback_label.config(
-                    text="⚠ No upcoming service found. Defaulted to earliest date.", 
-                    foreground="orange"
-                )
-            
-            self.update_current_service_date()
-        except Exception as e:
-            logging.error(f"Error loading initial data: {e}")
+        # Populate date dropdown
+        date_options = self.data_manager.get_sorted_dates()
+        self.date_dropdown['values'] = date_options
+        
+        # Set initial date
+        nearest_service = self.data_manager.find_nearest_upcoming_service()
+        if nearest_service:
+            self.date_var.set(nearest_service[0])
+            self.update_song_display(nearest_service[0])
+        elif date_options:
+            self.date_var.set(date_options[0])
+            self.update_song_display(date_options[0])
             self.feedback_label.config(
-                text="❌ Error loading data", 
-                foreground="red"
+                text="⚠ No upcoming service found. Defaulted to earliest date.", 
+                foreground="orange"
             )
+        
+        self.update_current_service_date()
     
     def on_date_change(self, event):
         """Handle date selection change"""
@@ -815,22 +858,11 @@ class ServiceManagerGUI:
 def main():
     """Main entry point"""
     try:
-        # Enable high DPI awareness on Windows
-        try:
-            import ctypes
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
-        except:
-            pass
-        
         app = ServiceManagerGUI()
         app.run()
     except Exception as e:
         logging.error(f"Application error: {e}")
-        # Create a simple error dialog even if the main app fails
-        root = tk.Tk()
-        root.withdraw()
         messagebox.showerror("Fatal Error", f"Application failed to start: {e}")
-        root.destroy()
 
 
 if __name__ == "__main__":
